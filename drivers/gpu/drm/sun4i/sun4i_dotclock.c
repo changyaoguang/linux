@@ -14,10 +14,12 @@
 #include <linux/regmap.h>
 
 #include "sun4i_tcon.h"
+#include "sun4i_dotclock.h"
 
 struct sun4i_dclk {
-	struct clk_hw	hw;
-	struct regmap	*regmap;
+	struct clk_hw		hw;
+	struct regmap		*regmap;
+	struct sun4i_tcon	*tcon;
 };
 
 static inline struct sun4i_dclk *hw_to_dclk(struct clk_hw *hw)
@@ -61,7 +63,7 @@ static unsigned long sun4i_dclk_recalc_rate(struct clk_hw *hw,
 	regmap_read(dclk->regmap, SUN4I_TCON0_DCLK_REG, &val);
 
 	val >>= SUN4I_TCON0_DCLK_DIV_SHIFT;
-	val &= SUN4I_TCON0_DCLK_DIV_WIDTH;
+	val &= (1 << SUN4I_TCON0_DCLK_DIV_WIDTH) - 1;
 
 	if (!val)
 		val = 1;
@@ -72,14 +74,43 @@ static unsigned long sun4i_dclk_recalc_rate(struct clk_hw *hw,
 static long sun4i_dclk_round_rate(struct clk_hw *hw, unsigned long rate,
 				  unsigned long *parent_rate)
 {
-	return *parent_rate / DIV_ROUND_CLOSEST(*parent_rate, rate);
+	struct sun4i_dclk *dclk = hw_to_dclk(hw);
+	struct sun4i_tcon *tcon = dclk->tcon;
+	unsigned long best_parent = 0;
+	u8 best_div = 1;
+	int i;
+
+	for (i = tcon->dclk_min_div; i <= tcon->dclk_max_div; i++) {
+		unsigned long ideal = rate * i;
+		unsigned long rounded;
+
+		rounded = clk_hw_round_rate(clk_hw_get_parent(hw),
+					    ideal);
+
+		if (rounded == ideal) {
+			best_parent = rounded;
+			best_div = i;
+			goto out;
+		}
+
+		if (abs(rate - rounded / i) <
+		    abs(rate - best_parent / best_div)) {
+			best_parent = rounded;
+			best_div = i;
+		}
+	}
+
+out:
+	*parent_rate = best_parent;
+
+	return best_parent / best_div;
 }
 
 static int sun4i_dclk_set_rate(struct clk_hw *hw, unsigned long rate,
 			       unsigned long parent_rate)
 {
 	struct sun4i_dclk *dclk = hw_to_dclk(hw);
-	int div = DIV_ROUND_CLOSEST(parent_rate, rate);
+	u8 div = parent_rate / rate;
 
 	return regmap_update_bits(dclk->regmap, SUN4I_TCON0_DCLK_REG,
 				  GENMASK(6, 0), div);
@@ -101,10 +132,13 @@ static int sun4i_dclk_get_phase(struct clk_hw *hw)
 static int sun4i_dclk_set_phase(struct clk_hw *hw, int degrees)
 {
 	struct sun4i_dclk *dclk = hw_to_dclk(hw);
+	u32 val = degrees / 120;
+
+	val <<= 28;
 
 	regmap_update_bits(dclk->regmap, SUN4I_TCON0_IO_POL_REG,
 			   GENMASK(29, 28),
-			   degrees / 120);
+			   val);
 
 	return 0;
 }
@@ -127,19 +161,25 @@ int sun4i_dclk_create(struct device *dev, struct sun4i_tcon *tcon)
 	const char *clk_name, *parent_name;
 	struct clk_init_data init;
 	struct sun4i_dclk *dclk;
+	int ret;
 
 	parent_name = __clk_get_name(tcon->sclk0);
-	of_property_read_string_index(dev->of_node, "clock-output-names", 0,
-				      &clk_name);
+	ret = of_property_read_string_index(dev->of_node,
+					    "clock-output-names", 0,
+					    &clk_name);
+	if (ret)
+		return ret;
 
 	dclk = devm_kzalloc(dev, sizeof(*dclk), GFP_KERNEL);
 	if (!dclk)
 		return -ENOMEM;
+	dclk->tcon = tcon;
 
 	init.name = clk_name;
 	init.ops = &sun4i_dclk_ops;
 	init.parent_names = &parent_name;
 	init.num_parents = 1;
+	init.flags = CLK_SET_RATE_PARENT;
 
 	dclk->regmap = tcon->regs;
 	dclk->hw.init = &init;

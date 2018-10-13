@@ -474,7 +474,6 @@ static const struct iio_info ad5592r_info = {
 	.read_raw = ad5592r_read_raw,
 	.write_raw = ad5592r_write_raw,
 	.write_raw_get_fmt = ad5592r_write_raw_get_fmt,
-	.driver_module = THIS_MODULE,
 };
 
 static ssize_t ad5592r_show_scale_available(struct iio_dev *iio_dev,
@@ -525,7 +524,7 @@ static int ad5592r_alloc_channels(struct ad5592r_state *st)
 
 	device_for_each_child_node(st->dev, child) {
 		ret = fwnode_property_read_u32(child, "reg", &reg);
-		if (ret || reg > ARRAY_SIZE(st->channel_modes))
+		if (ret || reg >= ARRAY_SIZE(st->channel_modes))
 			continue;
 
 		ret = fwnode_property_read_u32(child, "adi,mode", &tmp);
@@ -537,8 +536,9 @@ static int ad5592r_alloc_channels(struct ad5592r_state *st)
 			st->channel_offstate[reg] = tmp;
 	}
 
-	channels = devm_kzalloc(st->dev,
-			(1 + 2 * num_channels) * sizeof(*channels), GFP_KERNEL);
+	channels = devm_kcalloc(st->dev,
+			1 + 2 * num_channels, sizeof(*channels),
+			GFP_KERNEL);
 	if (!channels)
 		return -ENOMEM;
 

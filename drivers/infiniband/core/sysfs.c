@@ -38,9 +38,11 @@
 #include <linux/stat.h>
 #include <linux/string.h>
 #include <linux/netdevice.h>
+#include <linux/ethtool.h>
 
 #include <rdma/ib_mad.h>
 #include <rdma/ib_pma.h>
+#include <rdma/ib_cache.h>
 
 struct ib_port;
 
@@ -107,8 +109,22 @@ static ssize_t port_attr_show(struct kobject *kobj,
 	return port_attr->show(p, port_attr, buf);
 }
 
+static ssize_t port_attr_store(struct kobject *kobj,
+			       struct attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct port_attribute *port_attr =
+		container_of(attr, struct port_attribute, attr);
+	struct ib_port *p = container_of(kobj, struct ib_port, kobj);
+
+	if (!port_attr->store)
+		return -EIO;
+	return port_attr->store(p, port_attr, buf, count);
+}
+
 static const struct sysfs_ops port_sysfs_ops = {
-	.show = port_attr_show
+	.show	= port_attr_show,
+	.store	= port_attr_store
 };
 
 static ssize_t gid_attr_show(struct kobject *kobj,
@@ -252,8 +268,13 @@ static ssize_t rate_show(struct ib_port *p, struct port_attribute *unused,
 		speed = " EDR";
 		rate = 250;
 		break;
+	case IB_SPEED_HDR:
+		speed = " HDR";
+		rate = 500;
+		break;
 	case IB_SPEED_SDR:
 	default:		/* default to SDR for invalid rates */
+		speed = " SDR";
 		rate = 25;
 		break;
 	}
@@ -326,7 +347,7 @@ static struct attribute *port_default_attrs[] = {
 	NULL
 };
 
-static size_t print_ndev(struct ib_gid_attr *gid_attr, char *buf)
+static size_t print_ndev(const struct ib_gid_attr *gid_attr, char *buf)
 {
 	if (!gid_attr->ndev)
 		return -EINVAL;
@@ -334,33 +355,26 @@ static size_t print_ndev(struct ib_gid_attr *gid_attr, char *buf)
 	return sprintf(buf, "%s\n", gid_attr->ndev->name);
 }
 
-static size_t print_gid_type(struct ib_gid_attr *gid_attr, char *buf)
+static size_t print_gid_type(const struct ib_gid_attr *gid_attr, char *buf)
 {
 	return sprintf(buf, "%s\n", ib_cache_gid_type_str(gid_attr->gid_type));
 }
 
-static ssize_t _show_port_gid_attr(struct ib_port *p,
-				   struct port_attribute *attr,
-				   char *buf,
-				   size_t (*print)(struct ib_gid_attr *gid_attr,
-						   char *buf))
+static ssize_t _show_port_gid_attr(
+	struct ib_port *p, struct port_attribute *attr, char *buf,
+	size_t (*print)(const struct ib_gid_attr *gid_attr, char *buf))
 {
 	struct port_table_attribute *tab_attr =
 		container_of(attr, struct port_table_attribute, attr);
-	union ib_gid gid;
-	struct ib_gid_attr gid_attr = {};
+	const struct ib_gid_attr *gid_attr;
 	ssize_t ret;
 
-	ret = ib_query_gid(p->ibdev, p->port_num, tab_attr->index, &gid,
-			   &gid_attr);
-	if (ret)
-		goto err;
+	gid_attr = rdma_get_gid_attr(p->ibdev, p->port_num, tab_attr->index);
+	if (IS_ERR(gid_attr))
+		return PTR_ERR(gid_attr);
 
-	ret = print(&gid_attr, buf);
-
-err:
-	if (gid_attr.ndev)
-		dev_put(gid_attr.ndev);
+	ret = print(gid_attr, buf);
+	rdma_put_gid_attr(gid_attr);
 	return ret;
 }
 
@@ -369,14 +383,28 @@ static ssize_t show_port_gid(struct ib_port *p, struct port_attribute *attr,
 {
 	struct port_table_attribute *tab_attr =
 		container_of(attr, struct port_table_attribute, attr);
-	union ib_gid gid;
+	const struct ib_gid_attr *gid_attr;
 	ssize_t ret;
 
-	ret = ib_query_gid(p->ibdev, p->port_num, tab_attr->index, &gid, NULL);
-	if (ret)
-		return ret;
+	gid_attr = rdma_get_gid_attr(p->ibdev, p->port_num, tab_attr->index);
+	if (IS_ERR(gid_attr)) {
+		const union ib_gid zgid = {};
 
-	return sprintf(buf, "%pI6\n", gid.raw);
+		/* If reading GID fails, it is likely due to GID entry being
+		 * empty (invalid) or reserved GID in the table.  User space
+		 * expects to read GID table entries as long as it given index
+		 * is within GID table size.  Administrative/debugging tool
+		 * fails to query rest of the GID entries if it hits error
+		 * while querying a GID of the given index.  To avoid user
+		 * space throwing such error on fail to read gid, return zero
+		 * GID as before. This maintains backward compatibility.
+		 */
+		return sprintf(buf, "%pI6\n", zgid.raw);
+	}
+
+	ret = sprintf(buf, "%pI6\n", gid_attr->gid.raw);
+	rdma_put_gid_attr(gid_attr);
+	return ret;
 }
 
 static ssize_t show_port_gid_attr_ndev(struct ib_port *p,
@@ -530,6 +558,7 @@ static PORT_PMA_ATTR(port_xmit_data		    , 12, 32, 192);
 static PORT_PMA_ATTR(port_rcv_data		    , 13, 32, 224);
 static PORT_PMA_ATTR(port_xmit_packets		    , 14, 32, 256);
 static PORT_PMA_ATTR(port_rcv_packets		    , 15, 32, 288);
+static PORT_PMA_ATTR(port_xmit_wait		    ,  0, 32, 320);
 
 /*
  * Counters added by extended set
@@ -560,6 +589,7 @@ static struct attribute *pma_attrs[] = {
 	&port_pma_attr_port_rcv_data.attr.attr,
 	&port_pma_attr_port_xmit_packets.attr.attr,
 	&port_pma_attr_port_rcv_packets.attr.attr,
+	&port_pma_attr_port_xmit_wait.attr.attr,
 	NULL
 };
 
@@ -579,6 +609,7 @@ static struct attribute *pma_attrs_ext[] = {
 	&port_pma_attr_ext_port_xmit_data.attr.attr,
 	&port_pma_attr_ext_port_rcv_data.attr.attr,
 	&port_pma_attr_ext_port_xmit_packets.attr.attr,
+	&port_pma_attr_port_xmit_wait.attr.attr,
 	&port_pma_attr_ext_port_rcv_packets.attr.attr,
 	&port_pma_attr_ext_unicast_rcv_packets.attr.attr,
 	&port_pma_attr_ext_unicast_xmit_packets.attr.attr,
@@ -604,6 +635,7 @@ static struct attribute *pma_attrs_noietf[] = {
 	&port_pma_attr_ext_port_rcv_data.attr.attr,
 	&port_pma_attr_ext_port_xmit_packets.attr.attr,
 	&port_pma_attr_ext_port_rcv_packets.attr.attr,
+	&port_pma_attr_port_xmit_wait.attr.attr,
 	NULL
 };
 
@@ -787,10 +819,15 @@ static ssize_t show_hw_stats(struct kobject *kobj, struct attribute *attr,
 		dev = port->ibdev;
 		stats = port->hw_stats;
 	}
+	mutex_lock(&stats->lock);
 	ret = update_hw_stats(dev, stats, hsa->port_num, hsa->index);
 	if (ret)
-		return ret;
-	return print_hw_stat(stats, hsa->index, buf);
+		goto unlock;
+	ret = print_hw_stat(stats, hsa->index, buf);
+unlock:
+	mutex_unlock(&stats->lock);
+
+	return ret;
 }
 
 static ssize_t show_stats_lifespan(struct kobject *kobj,
@@ -798,17 +835,25 @@ static ssize_t show_stats_lifespan(struct kobject *kobj,
 				   char *buf)
 {
 	struct hw_stats_attribute *hsa;
+	struct rdma_hw_stats *stats;
 	int msecs;
 
 	hsa = container_of(attr, struct hw_stats_attribute, attr);
 	if (!hsa->port_num) {
 		struct ib_device *dev = container_of((struct device *)kobj,
 						     struct ib_device, dev);
-		msecs = jiffies_to_msecs(dev->hw_stats->lifespan);
+
+		stats = dev->hw_stats;
 	} else {
 		struct ib_port *p = container_of(kobj, struct ib_port, kobj);
-		msecs = jiffies_to_msecs(p->hw_stats->lifespan);
+
+		stats = p->hw_stats;
 	}
+
+	mutex_lock(&stats->lock);
+	msecs = jiffies_to_msecs(stats->lifespan);
+	mutex_unlock(&stats->lock);
+
 	return sprintf(buf, "%d\n", msecs);
 }
 
@@ -817,6 +862,7 @@ static ssize_t set_stats_lifespan(struct kobject *kobj,
 				  const char *buf, size_t count)
 {
 	struct hw_stats_attribute *hsa;
+	struct rdma_hw_stats *stats;
 	int msecs;
 	int jiffies;
 	int ret;
@@ -831,11 +877,18 @@ static ssize_t set_stats_lifespan(struct kobject *kobj,
 	if (!hsa->port_num) {
 		struct ib_device *dev = container_of((struct device *)kobj,
 						     struct ib_device, dev);
-		dev->hw_stats->lifespan = jiffies;
+
+		stats = dev->hw_stats;
 	} else {
 		struct ib_port *p = container_of(kobj, struct ib_port, kobj);
-		p->hw_stats->lifespan = jiffies;
+
+		stats = p->hw_stats;
 	}
+
+	mutex_lock(&stats->lock);
+	stats->lifespan = jiffies;
+	mutex_unlock(&stats->lock);
+
 	return count;
 }
 
@@ -889,9 +942,9 @@ static struct attribute *alloc_hsa_lifespan(char *name, u8 port_num)
 static void setup_hw_stats(struct ib_device *device, struct ib_port *port,
 			   u8 port_num)
 {
-	struct attribute_group *hsag = NULL;
+	struct attribute_group *hsag;
 	struct rdma_hw_stats *stats;
-	int i = 0, ret;
+	int i, ret;
 
 	stats = device->alloc_hw_stats(device, port_num);
 
@@ -899,19 +952,22 @@ static void setup_hw_stats(struct ib_device *device, struct ib_port *port,
 		return;
 
 	if (!stats->names || stats->num_counters <= 0)
-		goto err;
+		goto err_free_stats;
 
+	/*
+	 * Two extra attribue elements here, one for the lifespan entry and
+	 * one to NULL terminate the list for the sysfs core code
+	 */
 	hsag = kzalloc(sizeof(*hsag) +
-		       // 1 extra for the lifespan config entry
-		       sizeof(void *) * (stats->num_counters + 1),
+		       sizeof(void *) * (stats->num_counters + 2),
 		       GFP_KERNEL);
 	if (!hsag)
-		return;
+		goto err_free_stats;
 
 	ret = device->get_hw_stats(device, stats, port_num,
 				   stats->num_counters);
 	if (ret != stats->num_counters)
-		goto err;
+		goto err_free_hsag;
 
 	stats->timestamp = jiffies;
 
@@ -922,10 +978,14 @@ static void setup_hw_stats(struct ib_device *device, struct ib_port *port,
 		hsag->attrs[i] = alloc_hsa(i, port_num, stats->names[i]);
 		if (!hsag->attrs[i])
 			goto err;
+		sysfs_attr_init(hsag->attrs[i]);
 	}
 
+	mutex_init(&stats->lock);
 	/* treat an error here as non-fatal */
 	hsag->attrs[i] = alloc_hsa_lifespan("lifespan", port_num);
+	if (hsag->attrs[i])
+		sysfs_attr_init(hsag->attrs[i]);
 
 	if (port) {
 		struct kobject *kobj = &port->kobj;
@@ -946,10 +1006,12 @@ static void setup_hw_stats(struct ib_device *device, struct ib_port *port,
 	return;
 
 err:
-	kfree(stats);
 	for (; i >= 0; i--)
 		kfree(hsag->attrs[i]);
+err_free_hsag:
 	kfree(hsag);
+err_free_stats:
+	kfree(stats);
 	return;
 }
 
@@ -1180,7 +1242,7 @@ static ssize_t set_node_desc(struct device *device,
 	if (!dev->modify_device)
 		return -EIO;
 
-	memcpy(desc.node_desc, buf, min_t(int, count, 64));
+	memcpy(desc.node_desc, buf, min_t(int, count, IB_DEVICE_NODE_DESC_MAX));
 	ret = ib_modify_device(dev, IB_DEVICE_MODIFY_NODE_DESC, &desc);
 	if (ret)
 		return ret;
@@ -1188,16 +1250,28 @@ static ssize_t set_node_desc(struct device *device,
 	return count;
 }
 
+static ssize_t show_fw_ver(struct device *device, struct device_attribute *attr,
+			   char *buf)
+{
+	struct ib_device *dev = container_of(device, struct ib_device, dev);
+
+	ib_get_device_fw_str(dev, buf);
+	strlcat(buf, "\n", IB_FW_VERSION_NAME_MAX);
+	return strlen(buf);
+}
+
 static DEVICE_ATTR(node_type, S_IRUGO, show_node_type, NULL);
 static DEVICE_ATTR(sys_image_guid, S_IRUGO, show_sys_image_guid, NULL);
 static DEVICE_ATTR(node_guid, S_IRUGO, show_node_guid, NULL);
 static DEVICE_ATTR(node_desc, S_IRUGO | S_IWUSR, show_node_desc, set_node_desc);
+static DEVICE_ATTR(fw_ver, S_IRUGO, show_fw_ver, NULL);
 
 static struct device_attribute *ib_class_attributes[] = {
 	&dev_attr_node_type,
 	&dev_attr_sys_image_guid,
 	&dev_attr_node_guid,
-	&dev_attr_node_desc
+	&dev_attr_node_desc,
+	&dev_attr_fw_ver,
 };
 
 static void free_port_list_attributes(struct ib_device *device)
@@ -1233,7 +1307,6 @@ int ib_device_register_sysfs(struct ib_device *device,
 	int ret;
 	int i;
 
-	device->dev.parent = device->dma_device;
 	ret = dev_set_name(class_dev, "%s", device->name);
 	if (ret)
 		return ret;
@@ -1276,7 +1349,7 @@ err_put:
 	free_port_list_attributes(device);
 
 err_unregister:
-	device_unregister(class_dev);
+	device_del(class_dev);
 
 err:
 	return ret;

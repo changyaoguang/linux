@@ -76,8 +76,8 @@
 	 * We need to be a bit more cautious here. What if a kernel bug in
 	 * L1 ISR, caused SP to go whaco (some small value which looks like
 	 * USER stk) and then we take L2 ISR.
-	 * Above brlo alone would treat it as a valid L1-L2 sceanrio
-	 * instead of shouting alound
+	 * Above brlo alone would treat it as a valid L1-L2 scenario
+	 * instead of shouting around
 	 * The only feasible way is to make sure this L2 happened in
 	 * L1 prelogue ONLY i.e. ilink2 is less than a pre-set marker in
 	 * L1 ISR before it switches stack
@@ -192,6 +192,12 @@
 	PUSHAX	lp_start
 	PUSHAX	erbta
 
+#ifdef CONFIG_ARC_PLAT_EZNPS
+	.word CTOP_INST_SCHD_RW
+	PUSHAX  CTOP_AUX_GPA1
+	PUSHAX  CTOP_AUX_EFLAGS
+#endif
+
 	lr	r9, [ecr]
 	st      r9, [sp, PT_event]    /* EV_Trap expects r9 to have ECR */
 .endm
@@ -208,6 +214,12 @@
  * by hardware and that is not good.
  *-------------------------------------------------------------*/
 .macro EXCEPTION_EPILOGUE
+#ifdef CONFIG_ARC_PLAT_EZNPS
+	.word CTOP_INST_SCHD_RW
+	POPAX   CTOP_AUX_EFLAGS
+	POPAX   CTOP_AUX_GPA1
+#endif
+
 	POPAX	erbta
 	POPAX	lp_start
 	POPAX	lp_end
@@ -222,6 +234,9 @@
 	POP	gp
 	RESTORE_R12_TO_R0
 
+#ifdef CONFIG_ARC_CURR_IN_REG
+	ld	r25, [sp, 12]
+#endif
 	ld  sp, [sp] /* restore original sp */
 	/* orig_r0, ECR, user_r25 skipped automatically */
 .endm
@@ -265,6 +280,12 @@
 	PUSHAX	lp_end
 	PUSHAX	lp_start
 	PUSHAX	bta_l\LVL\()
+
+#ifdef CONFIG_ARC_PLAT_EZNPS
+	.word CTOP_INST_SCHD_RW
+	PUSHAX  CTOP_AUX_GPA1
+	PUSHAX  CTOP_AUX_EFLAGS
+#endif
 .endm
 
 /*--------------------------------------------------------------
@@ -277,6 +298,12 @@
  * by hardware and that is not good.
  *-------------------------------------------------------------*/
 .macro INTERRUPT_EPILOGUE  LVL
+#ifdef CONFIG_ARC_PLAT_EZNPS
+	.word CTOP_INST_SCHD_RW
+	POPAX   CTOP_AUX_EFLAGS
+	POPAX   CTOP_AUX_GPA1
+#endif
+
 	POPAX	bta_l\LVL\()
 	POPAX	lp_start
 	POPAX	lp_end
@@ -291,6 +318,9 @@
 	POP	gp
 	RESTORE_R12_TO_R0
 
+#ifdef CONFIG_ARC_CURR_IN_REG
+	ld	r25, [sp, 12]
+#endif
 	ld  sp, [sp] /* restore original sp */
 	/* orig_r0, ECR, user_r25 skipped automatically */
 .endm

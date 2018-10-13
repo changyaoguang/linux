@@ -36,9 +36,9 @@
 #include <sound/initval.h>
 #include <sound/soc.h>
 #include <sound/dmaengine_pcm.h>
-#include <sound/omap-pcm.h>
 
 #include "edma-pcm.h"
+#include "../omap/sdma-pcm.h"
 #include "davinci-mcasp.h"
 
 #define MCASP_MAX_AFIFO_DEPTH	64
@@ -320,12 +320,8 @@ static irqreturn_t davinci_mcasp_tx_irq_handler(int irq, void *data)
 		handled_mask |= XUNDRN;
 
 		substream = mcasp->substreams[SNDRV_PCM_STREAM_PLAYBACK];
-		if (substream) {
-			snd_pcm_stream_lock_irq(substream);
-			if (snd_pcm_running(substream))
-				snd_pcm_stop(substream, SNDRV_PCM_STATE_XRUN);
-			snd_pcm_stream_unlock_irq(substream);
-		}
+		if (substream)
+			snd_pcm_stop_xrun(substream);
 	}
 
 	if (!handled_mask)
@@ -355,12 +351,8 @@ static irqreturn_t davinci_mcasp_rx_irq_handler(int irq, void *data)
 		handled_mask |= ROVRN;
 
 		substream = mcasp->substreams[SNDRV_PCM_STREAM_CAPTURE];
-		if (substream) {
-			snd_pcm_stream_lock_irq(substream);
-			if (snd_pcm_running(substream))
-				snd_pcm_stop(substream, SNDRV_PCM_STATE_XRUN);
-			snd_pcm_stream_unlock_irq(substream);
-		}
+		if (substream)
+			snd_pcm_stop_xrun(substream);
 	}
 
 	if (!handled_mask)
@@ -629,7 +621,7 @@ static int davinci_mcasp_ch_constraint(struct davinci_mcasp *mcasp, int stream,
 	if (mcasp->tdm_mask[stream])
 		slots = hweight32(mcasp->tdm_mask[stream]);
 
-	for (i = 2; i <= slots; i++)
+	for (i = 1; i <= slots; i++)
 		list[count++] = i;
 
 	for (i = 2; i <= serializers; i++)
@@ -789,7 +781,7 @@ static int mcasp_common_hw_param(struct davinci_mcasp *mcasp, int stream,
 					rx_ser < max_active_serializers) {
 			mcasp_clr_bits(mcasp, DAVINCI_MCASP_PDIR_REG, AXR(i));
 			rx_ser++;
-		} else {
+		} else if (mcasp->serial_dir[i] == INACTIVE_MODE) {
 			mcasp_mod_bits(mcasp, DAVINCI_MCASP_XRSRCTL_REG(i),
 				       SRMOD_INACTIVE, SRMOD_MASK);
 		}
@@ -1218,7 +1210,7 @@ static int davinci_mcasp_hw_rule_format(struct snd_pcm_hw_params *params,
 
 	snd_mask_none(&nfmt);
 
-	for (i = 0; i < SNDRV_PCM_FORMAT_LAST; i++) {
+	for (i = 0; i <= SNDRV_PCM_FORMAT_LAST; i++) {
 		if (snd_mask_test(fmt, i)) {
 			uint sbits = snd_pcm_format_width(i);
 			int ppm;
@@ -1240,6 +1232,20 @@ static int davinci_mcasp_hw_rule_format(struct snd_pcm_hw_params *params,
 		count, rate, slots);
 
 	return snd_mask_refine(fmt, &nfmt);
+}
+
+static int davinci_mcasp_hw_rule_min_periodsize(
+		struct snd_pcm_hw_params *params, struct snd_pcm_hw_rule *rule)
+{
+	struct snd_interval *period_size = hw_param_interval(params,
+						SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+	struct snd_interval frames;
+
+	snd_interval_any(&frames);
+	frames.min = 64;
+	frames.integer = 1;
+
+	return snd_interval_refine(period_size, &frames);
 }
 
 static int davinci_mcasp_startup(struct snd_pcm_substream *substream,
@@ -1297,7 +1303,7 @@ static int davinci_mcasp_startup(struct snd_pcm_substream *substream,
 
 	snd_pcm_hw_constraint_minmax(substream->runtime,
 				     SNDRV_PCM_HW_PARAM_CHANNELS,
-				     2, max_channels);
+				     0, max_channels);
 
 	snd_pcm_hw_constraint_list(substream->runtime,
 				   0, SNDRV_PCM_HW_PARAM_CHANNELS,
@@ -1332,6 +1338,11 @@ static int davinci_mcasp_startup(struct snd_pcm_substream *substream,
 		if (ret)
 			return ret;
 	}
+
+	snd_pcm_hw_rule_add(substream->runtime, 0,
+			    SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
+			    davinci_mcasp_hw_rule_min_periodsize, NULL,
+			    SNDRV_PCM_HW_PARAM_PERIOD_SIZE, -1);
 
 	return 0;
 }
@@ -1459,13 +1470,13 @@ static struct snd_soc_dai_driver davinci_mcasp_dai[] = {
 		.suspend	= davinci_mcasp_suspend,
 		.resume		= davinci_mcasp_resume,
 		.playback	= {
-			.channels_min	= 2,
+			.channels_min	= 1,
 			.channels_max	= 32 * 16,
 			.rates 		= DAVINCI_MCASP_RATES,
 			.formats	= DAVINCI_MCASP_PCM_FMTS,
 		},
 		.capture 	= {
-			.channels_min 	= 2,
+			.channels_min 	= 1,
 			.channels_max	= 32 * 16,
 			.rates 		= DAVINCI_MCASP_RATES,
 			.formats	= DAVINCI_MCASP_PCM_FMTS,
@@ -1513,8 +1524,9 @@ static struct davinci_mcasp_pdata am33xx_mcasp_pdata = {
 };
 
 static struct davinci_mcasp_pdata dra7_mcasp_pdata = {
-	.tx_dma_offset = 0x200,
-	.rx_dma_offset = 0x284,
+	/* The CFG port offset will be calculated if it is needed */
+	.tx_dma_offset = 0,
+	.rx_dma_offset = 0,
 	.version = MCASP_VERSION_4,
 };
 
@@ -1598,7 +1610,12 @@ static struct davinci_mcasp_pdata *davinci_mcasp_set_pdata_from_of(
 		pdata = pdev->dev.platform_data;
 		return pdata;
 	} else if (match) {
-		pdata = (struct davinci_mcasp_pdata*) match->data;
+		pdata = devm_kmemdup(&pdev->dev, match->data, sizeof(*pdata),
+				     GFP_KERNEL);
+		if (!pdata) {
+			ret = -ENOMEM;
+			return pdata;
+		}
 	} else {
 		/* control shouldn't reach here. something is wrong */
 		ret = -EINVAL;
@@ -1715,7 +1732,8 @@ static int davinci_mcasp_get_dma_type(struct davinci_mcasp *mcasp)
 				PTR_ERR(chan));
 		return PTR_ERR(chan);
 	}
-	BUG_ON(!chan->device || !chan->device->dev);
+	if (WARN_ON(!chan->device || !chan->device->dev))
+		return -EINVAL;
 
 	if (chan->device->dev->of_node)
 		ret = of_property_read_string(chan->device->dev->of_node,
@@ -1732,6 +1750,52 @@ static int davinci_mcasp_get_dma_type(struct davinci_mcasp *mcasp)
 		return PCM_SDMA;
 
 	return PCM_EDMA;
+}
+
+static u32 davinci_mcasp_txdma_offset(struct davinci_mcasp_pdata *pdata)
+{
+	int i;
+	u32 offset = 0;
+
+	if (pdata->version != MCASP_VERSION_4)
+		return pdata->tx_dma_offset;
+
+	for (i = 0; i < pdata->num_serializer; i++) {
+		if (pdata->serial_dir[i] == TX_MODE) {
+			if (!offset) {
+				offset = DAVINCI_MCASP_TXBUF_REG(i);
+			} else {
+				pr_err("%s: Only one serializer allowed!\n",
+				       __func__);
+				break;
+			}
+		}
+	}
+
+	return offset;
+}
+
+static u32 davinci_mcasp_rxdma_offset(struct davinci_mcasp_pdata *pdata)
+{
+	int i;
+	u32 offset = 0;
+
+	if (pdata->version != MCASP_VERSION_4)
+		return pdata->rx_dma_offset;
+
+	for (i = 0; i < pdata->num_serializer; i++) {
+		if (pdata->serial_dir[i] == RX_MODE) {
+			if (!offset) {
+				offset = DAVINCI_MCASP_RXBUF_REG(i);
+			} else {
+				pr_err("%s: Only one serializer allowed!\n",
+				       __func__);
+				break;
+			}
+		}
+	}
+
+	return offset;
 }
 
 static int davinci_mcasp_probe(struct platform_device *pdev)
@@ -1796,9 +1860,13 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 
 	mcasp->num_serializer = pdata->num_serializer;
 #ifdef CONFIG_PM_SLEEP
-	mcasp->context.xrsr_regs = devm_kzalloc(&pdev->dev,
-					sizeof(u32) * mcasp->num_serializer,
+	mcasp->context.xrsr_regs = devm_kcalloc(&pdev->dev,
+					mcasp->num_serializer, sizeof(u32),
 					GFP_KERNEL);
+	if (!mcasp->context.xrsr_regs) {
+		ret = -ENOMEM;
+		goto err;
+	}
 #endif
 	mcasp->serial_dir = pdata->serial_dir;
 	mcasp->version = pdata->version;
@@ -1811,6 +1879,10 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 	if (irq >= 0) {
 		irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s_common",
 					  dev_name(&pdev->dev));
+		if (!irq_name) {
+			ret = -ENOMEM;
+			goto err;
+		}
 		ret = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 						davinci_mcasp_common_irq_handler,
 						IRQF_ONESHOT | IRQF_SHARED,
@@ -1828,6 +1900,10 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 	if (irq >= 0) {
 		irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s_rx",
 					  dev_name(&pdev->dev));
+		if (!irq_name) {
+			ret = -ENOMEM;
+			goto err;
+		}
 		ret = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 						davinci_mcasp_rx_irq_handler,
 						IRQF_ONESHOT, irq_name, mcasp);
@@ -1843,6 +1919,10 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 	if (irq >= 0) {
 		irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s_tx",
 					  dev_name(&pdev->dev));
+		if (!irq_name) {
+			ret = -ENOMEM;
+			goto err;
+		}
 		ret = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 						davinci_mcasp_tx_irq_handler,
 						IRQF_ONESHOT, irq_name, mcasp);
@@ -1862,7 +1942,7 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 	if (dat)
 		dma_data->addr = dat->start;
 	else
-		dma_data->addr = mem->start + pdata->tx_dma_offset;
+		dma_data->addr = mem->start + davinci_mcasp_txdma_offset(pdata);
 
 	dma = &mcasp->dma_request[SNDRV_PCM_STREAM_PLAYBACK];
 	res = platform_get_resource(pdev, IORESOURCE_DMA, 0);
@@ -1883,7 +1963,8 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 		if (dat)
 			dma_data->addr = dat->start;
 		else
-			dma_data->addr = mem->start + pdata->rx_dma_offset;
+			dma_data->addr =
+				mem->start + davinci_mcasp_rxdma_offset(pdata);
 
 		dma = &mcasp->dma_request[SNDRV_PCM_STREAM_CAPTURE];
 		res = platform_get_resource(pdev, IORESOURCE_DMA, 1);
@@ -1915,18 +1996,22 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 	 * bytes.
 	 */
 	mcasp->chconstr[SNDRV_PCM_STREAM_PLAYBACK].list =
-		devm_kzalloc(mcasp->dev, sizeof(unsigned int) *
-			     (32 + mcasp->num_serializer - 2),
+		devm_kcalloc(mcasp->dev,
+			     32 + mcasp->num_serializer - 1,
+			     sizeof(unsigned int),
 			     GFP_KERNEL);
 
 	mcasp->chconstr[SNDRV_PCM_STREAM_CAPTURE].list =
-		devm_kzalloc(mcasp->dev, sizeof(unsigned int) *
-			     (32 + mcasp->num_serializer - 2),
+		devm_kcalloc(mcasp->dev,
+			     32 + mcasp->num_serializer - 1,
+			     sizeof(unsigned int),
 			     GFP_KERNEL);
 
 	if (!mcasp->chconstr[SNDRV_PCM_STREAM_PLAYBACK].list ||
-	    !mcasp->chconstr[SNDRV_PCM_STREAM_CAPTURE].list)
-		return -ENOMEM;
+	    !mcasp->chconstr[SNDRV_PCM_STREAM_CAPTURE].list) {
+		ret = -ENOMEM;
+		goto err;
+	}
 
 	ret = davinci_mcasp_set_ch_constraints(mcasp);
 	if (ret)
@@ -1957,10 +2042,10 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 #endif
 		break;
 	case PCM_SDMA:
-#if IS_BUILTIN(CONFIG_SND_OMAP_SOC) || \
+#if IS_BUILTIN(CONFIG_SND_SDMA_SOC) || \
 	(IS_MODULE(CONFIG_SND_DAVINCI_SOC_MCASP) && \
-	 IS_MODULE(CONFIG_SND_OMAP_SOC))
-		ret = omap_pcm_platform_register(&pdev->dev);
+	 IS_MODULE(CONFIG_SND_SDMA_SOC))
+		ret = sdma_pcm_platform_register(&pdev->dev, NULL, NULL);
 #else
 		dev_err(&pdev->dev, "Missing SND_SDMA_SOC\n");
 		ret = -EINVAL;

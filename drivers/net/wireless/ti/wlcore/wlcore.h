@@ -40,6 +40,9 @@
 /* wl12xx/wl18xx maximum transmission power (in dBm) */
 #define WLCORE_MAX_TXPWR        25
 
+/* Texas Instruments pre assigned OUI */
+#define WLCORE_TI_OUI_ADDRESS 0x080028
+
 /* forward declaration */
 struct wl1271_tx_hw_descr;
 enum wl_rx_buf_align;
@@ -345,7 +348,6 @@ struct wl1271 {
 	enum nl80211_band band;
 
 	struct completion *elp_compl;
-	struct delayed_work elp_work;
 
 	/* in dBm */
 	int power_level;
@@ -501,6 +503,9 @@ struct wl1271 {
 
 	/* dynamic fw traces */
 	u32 dynamic_fw_traces;
+
+	/* time sync zone master */
+	u8 zone_master_mac_addr[ETH_ALEN];
 };
 
 int wlcore_probe(struct wl1271 *wl, struct platform_device *pdev);

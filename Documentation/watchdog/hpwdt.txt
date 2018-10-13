@@ -1,9 +1,9 @@
-Last reviewed: 04/04/2016
+Last reviewed: 05/20/2016
 
                      HPE iLO NMI Watchdog Driver
               NMI sourcing for iLO based ProLiant Servers
                      Documentation and Driver by
-              Thomas Mingarelli <thomas.mingarelli@hpe.com>
+                         Thomas Mingarelli
 
  The HPE iLO NMI Watchdog driver is a kernel module that provides basic
  watchdog functionality and the added benefit of NMI sourcing. Both the
@@ -15,7 +15,7 @@ Last reviewed: 04/04/2016
 
  Watchdog functionality is enabled like any other common watchdog driver. That
  is, an application needs to be started that kicks off the watchdog timer. A
- basic application exists in the Documentation/watchdog/src directory called
+ basic application exists in tools/testing/selftests/watchdog/ named
  watchdog-test.c. Simply compile the C file and kick it off. If the system
  gets into a bad state and hangs, the HPE ProLiant iLO timer register will
  not be updated in a timely fashion and a hardware system reset (also known as
@@ -95,4 +95,3 @@ Last reviewed: 04/04/2016
 
 
  -- Tom Mingarelli
-    (thomas.mingarelli@hpe.com)

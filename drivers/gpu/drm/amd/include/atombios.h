@@ -188,7 +188,7 @@
 #define HW_ASSISTED_I2C_STATUS_FAILURE     2
 #define HW_ASSISTED_I2C_STATUS_SUCCESS     1
 
-#pragma pack(1)                                       // BIOS data must use byte aligment
+#pragma pack(1)                                       // BIOS data must use byte alignment
 
 // Define offset to location of ROM header.
 #define OFFSET_TO_POINTER_TO_ATOM_ROM_HEADER         0x00000048L
@@ -494,6 +494,7 @@ typedef struct _COMPUTE_MEMORY_ENGINE_PLL_PARAMETERS_V3
   union
   {
     ATOM_COMPUTE_CLOCK_FREQ  ulClock;         //Input Parameter
+    ULONG ulClockParams;                      //ULONG access for BE
     ATOM_S_MPLL_FB_DIVIDER   ulFbDiv;         //Output Parameter
   };
   UCHAR   ucRefDiv;                           //Output Parameter
@@ -526,6 +527,7 @@ typedef struct _COMPUTE_MEMORY_ENGINE_PLL_PARAMETERS_V5
   union
   {
     ATOM_COMPUTE_CLOCK_FREQ  ulClock;         //Input Parameter
+    ULONG ulClockParams;                      //ULONG access for BE
     ATOM_S_MPLL_FB_DIVIDER   ulFbDiv;         //Output Parameter
   };
   UCHAR   ucRefDiv;                           //Output Parameter
@@ -629,6 +631,13 @@ typedef struct _COMPUTE_MEMORY_CLOCK_PARAM_PARAMETERS_V2_2
   COMPUTE_MEMORY_ENGINE_PLL_PARAMETERS_V4 ulClock;
   ULONG ulReserved;
 }COMPUTE_MEMORY_CLOCK_PARAM_PARAMETERS_V2_2;
+
+typedef struct _COMPUTE_MEMORY_CLOCK_PARAM_PARAMETERS_V2_3
+{
+  COMPUTE_MEMORY_ENGINE_PLL_PARAMETERS_V4 ulClock;
+  USHORT  usMclk_fcw_frac;                  //fractional divider of fcw = usSclk_fcw_frac/65536
+  USHORT  usMclk_fcw_int;                   //integer divider of fcwc
+}COMPUTE_MEMORY_CLOCK_PARAM_PARAMETERS_V2_3;
 
 //Input parameter of DynamicMemorySettingsTable
 //when ATOM_COMPUTE_CLOCK_FREQ.ulComputeClockFlag = COMPUTE_MEMORY_PLL_PARAM
@@ -4290,6 +4299,7 @@ typedef struct _ATOM_DPCD_INFO
 #define ATOM_VRAM_OPERATION_FLAGS_SHIFT        30
 #define   ATOM_VRAM_BLOCK_NEEDS_NO_RESERVATION   0x1
 #define   ATOM_VRAM_BLOCK_NEEDS_RESERVATION      0x0
+#define   ATOM_VRAM_BLOCK_SRIOV_MSG_SHARE_RESERVATION 0x2
 
 /***********************************************************************************/
 // Structure used in VRAM_UsageByFirmwareTable
@@ -4359,7 +4369,7 @@ typedef struct _ATOM_GPIO_PIN_ASSIGNMENT
 // GPIO use to control PCIE_VDDC in certain SLT board
 #define PCIE_VDDC_CONTROL_GPIO_PINID        56
 
-//from SMU7.x, if ucGPIO_ID=PP_AC_DC_SWITCH_GPIO_PINID in GPIO_LUTTable, AC/DC swithing feature is enable
+//from SMU7.x, if ucGPIO_ID=PP_AC_DC_SWITCH_GPIO_PINID in GPIO_LUTTable, AC/DC switching feature is enable
 #define PP_AC_DC_SWITCH_GPIO_PINID          60
 //from SMU7.x, if ucGPIO_ID=VDDC_REGULATOR_VRHOT_GPIO_PINID in GPIO_LUTable, VRHot feature is enable
 #define VDDC_VRHOT_GPIO_PINID               61
@@ -5537,6 +5547,78 @@ typedef struct  _ATOM_ASIC_PROFILING_INFO_V3_5
   ULONG  ulMargin_DC_sigma;       //def="EVV_MARGIN_DC_SIGMA" descr="Regulator DC tolerance margin (mV) unit=100" unit="100"/>
   ULONG  ulReserved[12];
 }ATOM_ASIC_PROFILING_INFO_V3_5;
+
+/* for Polars10/11 AVFS parameters */
+typedef struct  _ATOM_ASIC_PROFILING_INFO_V3_6
+{
+  ATOM_COMMON_TABLE_HEADER         asHeader;
+  ULONG  ulMaxVddc;
+  ULONG  ulMinVddc;
+  USHORT usLkgEuseIndex;
+  UCHAR  ucLkgEfuseBitLSB;
+  UCHAR  ucLkgEfuseLength;
+  ULONG  ulLkgEncodeLn_MaxDivMin;
+  ULONG  ulLkgEncodeMax;
+  ULONG  ulLkgEncodeMin;
+  EFUSE_LINEAR_FUNC_PARAM sRoFuse;
+  ULONG  ulEvvDefaultVddc;
+  ULONG  ulEvvNoCalcVddc;
+  ULONG  ulSpeed_Model;
+  ULONG  ulSM_A0;
+  ULONG  ulSM_A1;
+  ULONG  ulSM_A2;
+  ULONG  ulSM_A3;
+  ULONG  ulSM_A4;
+  ULONG  ulSM_A5;
+  ULONG  ulSM_A6;
+  ULONG  ulSM_A7;
+  UCHAR  ucSM_A0_sign;
+  UCHAR  ucSM_A1_sign;
+  UCHAR  ucSM_A2_sign;
+  UCHAR  ucSM_A3_sign;
+  UCHAR  ucSM_A4_sign;
+  UCHAR  ucSM_A5_sign;
+  UCHAR  ucSM_A6_sign;
+  UCHAR  ucSM_A7_sign;
+  ULONG  ulMargin_RO_a;
+  ULONG  ulMargin_RO_b;
+  ULONG  ulMargin_RO_c;
+  ULONG  ulMargin_fixed;
+  ULONG  ulMargin_Fmax_mean;
+  ULONG  ulMargin_plat_mean;
+  ULONG  ulMargin_Fmax_sigma;
+  ULONG  ulMargin_plat_sigma;
+  ULONG  ulMargin_DC_sigma;
+  ULONG  ulLoadLineSlop;
+  ULONG  ulaTDClimitPerDPM[8];
+  ULONG  ulaNoCalcVddcPerDPM[8];
+  ULONG  ulAVFS_meanNsigma_Acontant0;
+  ULONG  ulAVFS_meanNsigma_Acontant1;
+  ULONG  ulAVFS_meanNsigma_Acontant2;
+  USHORT usAVFS_meanNsigma_DC_tol_sigma;
+  USHORT usAVFS_meanNsigma_Platform_mean;
+  USHORT usAVFS_meanNsigma_Platform_sigma;
+  ULONG  ulGB_VDROOP_TABLE_CKSOFF_a0;
+  ULONG  ulGB_VDROOP_TABLE_CKSOFF_a1;
+  ULONG  ulGB_VDROOP_TABLE_CKSOFF_a2;
+  ULONG  ulGB_VDROOP_TABLE_CKSON_a0;
+  ULONG  ulGB_VDROOP_TABLE_CKSON_a1;
+  ULONG  ulGB_VDROOP_TABLE_CKSON_a2;
+  ULONG  ulAVFSGB_FUSE_TABLE_CKSOFF_m1;
+  USHORT usAVFSGB_FUSE_TABLE_CKSOFF_m2;
+  ULONG  ulAVFSGB_FUSE_TABLE_CKSOFF_b;
+  ULONG  ulAVFSGB_FUSE_TABLE_CKSON_m1;
+  USHORT usAVFSGB_FUSE_TABLE_CKSON_m2;
+  ULONG  ulAVFSGB_FUSE_TABLE_CKSON_b;
+  USHORT usMaxVoltage_0_25mv;
+  UCHAR  ucEnableGB_VDROOP_TABLE_CKSOFF;
+  UCHAR  ucEnableGB_VDROOP_TABLE_CKSON;
+  UCHAR  ucEnableGB_FUSE_TABLE_CKSOFF;
+  UCHAR  ucEnableGB_FUSE_TABLE_CKSON;
+  USHORT usPSM_Age_ComFactor;
+  UCHAR  ucEnableApplyAVFS_CKS_OFF_Voltage;
+  UCHAR  ucReserved;
+}ATOM_ASIC_PROFILING_INFO_V3_6;
 
 
 typedef struct _ATOM_SCLK_FCW_RANGE_ENTRY_V1{
@@ -9106,7 +9188,7 @@ typedef struct  _ATOM_POWERPLAY_INFO_V3
 
 /*********************************************************************************/
 
-#pragma pack() // BIOS data must use byte aligment
+#pragma pack() // BIOS data must use byte alignment
 
 #pragma pack(1)
 
@@ -9137,7 +9219,7 @@ typedef struct _ATOM_SERVICE_INFO
 
 
 
-#pragma pack() // BIOS data must use byte aligment
+#pragma pack() // BIOS data must use byte alignment
 
 //
 // AMD ACPI Table

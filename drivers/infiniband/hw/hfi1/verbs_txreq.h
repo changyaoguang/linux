@@ -1,5 +1,5 @@
 /*
- * Copyright(c) 2016 Intel Corporation.
+ * Copyright(c) 2016 - 2018 Intel Corporation.
  *
  * This file is provided under a dual BSD/GPLv2 license.  When using or
  * redistributing this file, you may do so under either license.
@@ -56,7 +56,7 @@
 #include "iowait.h"
 
 struct verbs_txreq {
-	struct hfi1_pio_header	phdr;
+	struct hfi1_sdma_header	phdr;
 	struct sdma_txreq       txreq;
 	struct rvt_qp           *qp;
 	struct rvt_swqe         *wqe;
@@ -65,6 +65,7 @@ struct verbs_txreq {
 	struct sdma_engine     *sde;
 	struct send_context     *psc;
 	u16                     hdr_dwords;
+	u16			s_cur_size;
 };
 
 struct hfi1_ibdev;
@@ -73,6 +74,7 @@ struct verbs_txreq *__get_txreq(struct hfi1_ibdev *dev,
 
 static inline struct verbs_txreq *get_txreq(struct hfi1_ibdev *dev,
 					    struct rvt_qp *qp)
+	__must_hold(&qp->slock)
 {
 	struct verbs_txreq *tx;
 	struct hfi1_qp_priv *priv = qp->priv;
@@ -81,7 +83,7 @@ static inline struct verbs_txreq *get_txreq(struct hfi1_ibdev *dev,
 	if (unlikely(!tx)) {
 		/* call slow path to get the lock */
 		tx = __get_txreq(dev, qp);
-		if (IS_ERR(tx))
+		if (!tx)
 			return tx;
 	}
 	tx->qp = qp;
@@ -90,6 +92,8 @@ static inline struct verbs_txreq *get_txreq(struct hfi1_ibdev *dev,
 	tx->psc = priv->s_sendcontext;
 	/* so that we can test if the sdma decriptors are there */
 	tx->txreq.num_desc = 0;
+	/* Set the header type */
+	tx->phdr.hdr.hdr_type = priv->hdr_type;
 	return tx;
 }
 
@@ -107,6 +111,13 @@ static inline struct verbs_txreq *get_waiting_verbs_txreq(struct rvt_qp *qp)
 	if (stx)
 		return container_of(stx, struct verbs_txreq, txreq);
 	return NULL;
+}
+
+static inline bool verbs_txreq_queued(struct rvt_qp *qp)
+{
+	struct hfi1_qp_priv *priv = qp->priv;
+
+	return iowait_packet_queued(&priv->s_iowait);
 }
 
 void hfi1_put_txreq(struct verbs_txreq *tx);

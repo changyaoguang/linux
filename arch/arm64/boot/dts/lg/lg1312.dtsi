@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * dts file for lg1312 SoC
  *
@@ -125,7 +126,7 @@
 		#size-cells = <1>;
 		#interrupts-cells = <3>;
 
-		compatible = "arm,amba-bus";
+		compatible = "simple-bus";
 		interrupt-parent = <&gic>;
 		ranges;
 

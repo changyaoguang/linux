@@ -65,10 +65,10 @@ static bool hda_writeable_reg(struct device *dev, unsigned int reg)
 {
 	struct hdac_device *codec = dev_to_hdac_dev(dev);
 	unsigned int verb = get_verb(reg);
+	const unsigned int *v;
 	int i;
 
-	for (i = 0; i < codec->vendor_verbs.used; i++) {
-		unsigned int *v = snd_array_elem(&codec->vendor_verbs, i);
+	snd_array_for_each(&codec->vendor_verbs, i, v) {
 		if (verb == *v)
 			return true;
 	}
@@ -444,7 +444,7 @@ int snd_hdac_regmap_write_raw(struct hdac_device *codec, unsigned int reg,
 	err = reg_raw_write(codec, reg, val);
 	if (err == -EAGAIN) {
 		err = snd_hdac_power_up_pm(codec);
-		if (!err)
+		if (err >= 0)
 			err = reg_raw_write(codec, reg, val);
 		snd_hdac_power_down_pm(codec);
 	}
@@ -470,7 +470,7 @@ static int __snd_hdac_regmap_read_raw(struct hdac_device *codec,
 	err = reg_raw_read(codec, reg, val, uncached);
 	if (err == -EAGAIN) {
 		err = snd_hdac_power_up_pm(codec);
-		if (!err)
+		if (err >= 0)
 			err = reg_raw_read(codec, reg, val, uncached);
 		snd_hdac_power_down_pm(codec);
 	}

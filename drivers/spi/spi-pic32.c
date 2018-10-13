@@ -52,14 +52,14 @@ struct pic32_spi_regs {
 
 /* Bit fields of SPI Control Register */
 #define CTRL_RX_INT_SHIFT	0  /* Rx interrupt generation */
-#define  RX_FIFO_EMTPY		0
+#define  RX_FIFO_EMPTY		0
 #define  RX_FIFO_NOT_EMPTY	1 /* not empty */
 #define  RX_FIFO_HALF_FULL	2 /* full by half or more */
 #define  RX_FIFO_FULL		3 /* completely full */
 
 #define CTRL_TX_INT_SHIFT	2  /* TX interrupt generation */
 #define  TX_FIFO_ALL_EMPTY	0 /* completely empty */
-#define  TX_FIFO_EMTPY		1 /* empty */
+#define  TX_FIFO_EMPTY		1 /* empty */
 #define  TX_FIFO_HALF_EMPTY	2 /* empty by half or more */
 #define  TX_FIFO_NOT_FULL	3 /* atleast one empty */
 
@@ -507,6 +507,7 @@ static int pic32_spi_one_transfer(struct spi_master *master,
 {
 	struct pic32_spi *pic32s;
 	bool dma_issued = false;
+	unsigned long timeout;
 	int ret;
 
 	pic32s = spi_master_get_devdata(master);
@@ -553,8 +554,8 @@ static int pic32_spi_one_transfer(struct spi_master *master,
 	}
 
 	/* wait for completion */
-	ret = wait_for_completion_timeout(&pic32s->xfer_done, 2 * HZ);
-	if (ret <= 0) {
+	timeout = wait_for_completion_timeout(&pic32s->xfer_done, 2 * HZ);
+	if (timeout == 0) {
 		dev_err(&spi->dev, "wait error/timedout\n");
 		if (dma_issued) {
 			dmaengine_terminate_all(master->dma_rx);
